@@ -1,1 +1,164 @@
+// Moore FSM: Non-overlapping 1001 sequence detector
+// Compatible with Verilog 2001
 
+module seq_det_1001_moore (
+    input  wire clk,
+    input  wire rst,
+    input  wire in,
+    output reg  out
+);
+
+    // State encoding using parameters
+    parameter S0 = 3'b000;
+    parameter S1 = 3'b001;
+    parameter S2 = 3'b010;
+    parameter S3 = 3'b011;
+    parameter S4 = 3'b100;
+
+    reg [2:0] current_state, next_state;
+
+    // State register (sequential)
+    always @(posedge clk) begin
+        if (rst)
+            current_state <= S0;
+        else
+            current_state <= next_state;
+    end
+
+    // Next-state logic (combinational)
+    always @(*) begin
+        case (current_state)
+            S0: next_state = in ? S1 : S0;
+            S1: next_state = in ? S1 : S2;
+            S2: next_state = in ? S1 : S3;
+            S3: next_state = in ? S4 : S0;
+            S4: next_state = S0;
+            default: next_state = S0;
+        endcase
+    end
+
+    // Output logic (Moore: depends only on current state)
+    always @(*) begin
+        case (current_state)
+            S4:      out = 1'b1;
+            default: out = 1'b0;
+        endcase
+    end
+
+endmodule
+
+
+
+module tb_seq_det_1001;
+
+    reg clk, rst, in;
+    wire out;
+
+    // Instantiate DUT
+    seq_det_1001_moore dut (
+        .clk(clk),
+        .rst(rst),
+        .in(in),
+        .out(out)
+    );
+
+    // Clock: 10ns period
+    always #5 clk = ~clk;
+
+    // Task to apply one bit and display result
+    task apply_bit;
+        input bit_in;
+        begin
+            in = bit_in;
+            @(posedge clk);
+            #1; // small delay to let output settle
+            $display("time=%0t | in=%b | state=%b | out=%b",
+                      $time, in, dut.current_state, out);
+        end
+    endtask
+
+    initial begin
+        // Initialize
+        clk = 0;
+        rst = 1;
+        in  = 0;
+
+        // Hold reset for 2 cycles
+        @(posedge clk); @(posedge clk);
+        rst = 0;
+        $display("--- Reset released ---");
+
+        // -----------------------------------------------
+        // Test 1: Clean sequence 1001 → expect out=1
+        // -----------------------------------------------
+        $display("\n--- Test 1: 1 0 0 1 (expect out=1 at last bit) ---");
+        apply_bit(1);   // S0 -> S1
+        apply_bit(0);   // S1 -> S2
+        apply_bit(0);   // S2 -> S3
+        apply_bit(1);   // S3 -> S4  out=1
+
+        // -----------------------------------------------
+        // Test 2: Immediate second 1001 (non-overlap check)
+        // -----------------------------------------------
+        $display("\n--- Test 2: 1 0 0 1 again (non-overlap, expect out=1) ---");
+        apply_bit(1);   // S0 -> S1
+        apply_bit(0);   // S1 -> S2
+        apply_bit(0);   // S2 -> S3
+        apply_bit(1);   // S3 -> S4  out=1
+
+        // -----------------------------------------------
+        // Test 3: Overlapping attempt 1 0 0 1 0 0 1
+        // non-overlap: second detect only at last 1
+        // -----------------------------------------------
+        $display("\n--- Test 3: 1 0 0 1 0 0 1 (non-overlap) ---");
+        apply_bit(1);   // S0 -> S1
+        apply_bit(0);   // S1 -> S2
+        apply_bit(0);   // S2 -> S3
+        apply_bit(1);   // S3 -> S4  out=1
+        apply_bit(0);   // S4 -> S0
+        apply_bit(0);   // S0 -> S0
+        apply_bit(1);   // S0 -> S1  (no detection, out=0)
+
+        // -----------------------------------------------
+        // Test 4: False sequence 1 0 0 0 (no detection)
+        // -----------------------------------------------
+        $display("\n--- Test 4: 1 0 0 0 (expect out=0 always) ---");
+        apply_bit(1);   // S0 -> S1
+        apply_bit(0);   // S1 -> S2
+        apply_bit(0);   // S2 -> S3
+        apply_bit(0);   // S3 -> S0  out=0
+
+        // -----------------------------------------------
+        // Test 5: 1 1 0 0 1 (extra 1 at start)
+        // -----------------------------------------------
+        $display("\n--- Test 5: 1 1 0 0 1 (expect out=1 at last bit) ---");
+        apply_bit(1);   // S0 -> S1
+        apply_bit(1);   // S1 -> S1 (self-loop)
+        apply_bit(0);   // S1 -> S2
+        apply_bit(0);   // S2 -> S3
+        apply_bit(1);   // S3 -> S4  out=1
+
+        // -----------------------------------------------
+        // Test 6: Mid-sequence reset
+        // -----------------------------------------------
+        $display("\n--- Test 6: mid-sequence reset (expect out=0) ---");
+        apply_bit(1);   // S0 -> S1
+        apply_bit(0);   // S1 -> S2
+        rst = 1;
+        @(posedge clk); #1;
+        $display("time=%0t | RESET APPLIED | state=%b | out=%b",
+                  $time, dut.current_state, out);
+        rst = 0;
+        apply_bit(0);   // back to S0, out=0
+        apply_bit(1);   // S0 -> S1
+
+        $display("\n--- Simulation complete ---");
+        #20 $finish;
+    end
+
+    initial begin
+        $dumpfile("dump.vcd");
+        $dumpvars(0, tb_seq_det_1001);
+    end
+
+endmodule
